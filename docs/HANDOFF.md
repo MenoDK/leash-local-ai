@@ -13,8 +13,8 @@ lab on when `LEASH_ENV=production`.
 ## 2. Where we stopped
 
 The six crates, the server, the landing page and lab in 14 languages, the browser tests, the smoke test, the mutation check,
-the delivery files and the documentation are complete and verified locally (section 8). The CI workflow is written and has not
-run on GitHub yet.
+the delivery files and the documentation are complete and verified locally (section 8). The CI workflow ran on GitHub on 2026-11-04 and all six
+jobs passed on the first run (Rust, MSRV 1.88, mutation check, stack, browser, security with `cargo audit`).
 
 ## 3. What the owner does now
 

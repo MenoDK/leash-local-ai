@@ -15,7 +15,7 @@ _What_ and _when_. The _how_ lives in the code and tests, the _why_ in the [ADRs
 | 9   | Mutation check of the defences                                                        | done    | `scripts/sabotage.sh`, `make sabotage`                                                     |
 | 10  | Container, health-gated compose, smoke test                                           | done    | `Dockerfile`, `docker-compose.yml`, `scripts/smoke.sh`                                     |
 | 11  | Browser tests with accessibility scans                                                | done    | `e2e/`, `make e2e`                                                                         |
-| 12  | CI workflow                                                                           | written | `.github/workflows/ci.yml`: actionlint clean; not yet run on GitHub                        |
+| 12  | CI workflow                                                                           | done    | `.github/workflows/ci.yml`: all six jobs green on the first run (2026-11-04), `cargo audit` included |
 | 13  | Sandbox around the child (namespaces, seccomp, Landlock)                              | todo    | ADR 0003                                                                                   |
 | 14  | Open memory files descriptor-first (`openat`, `O_NOFOLLOW`) to close the walk/read window | todo | ADR 0006                                                                                   |
 | 15  | Receipts in write-once storage; a key id on each ledger line for rotation             | todo    | ADR 0004                                                                                   |
