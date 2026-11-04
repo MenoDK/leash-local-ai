@@ -187,7 +187,8 @@ impl Bridge {
                 let identity = self.ca.issue(CONTROLLER_NAME, Validity::Expired).ok()?;
                 Self::attempt(client, &self.ca.certificate(), identity).await
             }
-            "no_certificate" => {
+            "no_certificate" => Self::without_certificate(client, &self.ca.certificate()).await,
+            "not_tls" => {
                 let mut client = client;
                 let _ = client.write_all(b"{\"type\":\"activate\"}\n").await;
                 let mut sink = Vec::new();
@@ -206,13 +207,49 @@ impl Bridge {
         };
         Some(json!({
             "kind": kind,
-            "refused": stage != "none",
+            "refused": matches!(stage, "handshake" | "application"),
             "stage": stage,
             "controller_saw": detail,
             "agent_saw": agent_side,
             "agent_state_after": fresh.state().await,
             "note": "tried against a fresh agent instance, so the live session is not disturbed",
         }))
+    }
+
+    /// A TLS client that trusts the authority but has no certificate of its own. Under TLS 1.3 the client's side of the
+    /// handshake finishes before the server looks for the certificate, so the refusal arrives on the first read.
+    async fn without_certificate(
+        client: DuplexStream,
+        ca: &rustls::pki_types::CertificateDer<'static>,
+    ) -> (&'static str, String) {
+        let mut roots = rustls::RootCertStore::empty();
+        if roots.add(ca.clone()).is_err() {
+            return ("setup", "could not trust the authority".to_owned());
+        }
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let Ok(builder) = rustls::ClientConfig::builder_with_provider(provider)
+            .with_protocol_versions(&[&rustls::version::TLS13])
+        else {
+            return ("setup", "could not build the TLS client".to_owned());
+        };
+        let config = builder.with_root_certificates(roots).with_no_client_auth();
+        let Ok(name) = rustls::pki_types::ServerName::try_from(AGENT_NAME) else {
+            return ("setup", "bad server name".to_owned());
+        };
+        let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+        let mut tls =
+            match tokio::time::timeout(Duration::from_secs(5), connector.connect(name, client))
+                .await
+            {
+                Ok(Ok(tls)) => tls,
+                Ok(Err(error)) => return ("handshake", format!("I/O: {error}")),
+                Err(_) => return ("handshake", "timed out".to_owned()),
+            };
+        let _ = leash_bridge::write_frame(&mut tls, &leash_bridge::Request::Status {}).await;
+        match leash_bridge::read_frame::<leash_bridge::Response>(&mut tls).await {
+            Err(error) => ("handshake", format!("the agent hung up: {error}")),
+            Ok(_) => ("none", "the agent answered".to_owned()),
+        }
     }
 
     async fn attempt(

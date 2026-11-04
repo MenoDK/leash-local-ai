@@ -542,6 +542,36 @@ mod tests {
         assert!(verify(&path, None).broken.is_some(), "reordering");
     }
 
+    /// The case the two checks above cannot see. Two histories written with the same key agree on every sequence
+    /// number, and every entry in each carries a valid hash of its own. Cutting an entry out of one and pasting it into
+    /// the other passes the sequence check and the hash check; only the link to the previous entry refuses it.
+    #[test]
+    fn an_entry_signed_in_another_history_cannot_be_spliced_in() {
+        let dir = tempfile::tempdir().expect("dir");
+        let mine = filled(dir.path(), Some(key()), 4);
+
+        let other_dir = tempfile::tempdir().expect("dir");
+        let other_path = other_dir.path().join("ledger.jsonl");
+        let mut other = Ledger::open(&other_path, Some(key())).expect("open");
+        for i in 0..4 {
+            other
+                .append(record(Kind::Proposed, &format!("other{i}")))
+                .expect("append");
+        }
+        drop(other);
+
+        let mut spliced = lines(&mine);
+        spliced[2].clone_from(&lines(&other_path)[2]);
+        write_lines(&mine, &spliced);
+
+        let report = verify(&mine, Some(&key()));
+        assert_eq!(
+            report.broken.map(|b| (b.seq, b.reason)),
+            Some((2, "does not follow the previous entry")),
+            "a foreign entry with a valid hash and the right sequence number must still be refused"
+        );
+    }
+
     #[test]
     fn a_torn_last_line_is_reported_and_refuses_a_reopen() {
         let dir = tempfile::tempdir().expect("dir");

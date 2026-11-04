@@ -3,7 +3,7 @@ use std::time::Duration;
 use axum::Json;
 use axum::extract::State;
 use leash_censor::{Limits, Provenance, scan_for_instructions, seal};
-use leash_gateway::{Options, SystemPrompt};
+use leash_gateway::{Behaviour, Options, SystemPrompt};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -15,10 +15,36 @@ use crate::state::Shared;
 /// One attempt may take this long; a slower provider counts as failed.
 pub const CALL_TIMEOUT: Duration = Duration::from_secs(3);
 
+/// Providers in routing order. The two stand-ins also report how they are currently set to behave.
 pub async fn status(State(state): State<Shared>) -> Json<Value> {
-    Json(
-        json!({"providers": state.gateway.status(), "call_timeout_ms": CALL_TIMEOUT.as_millis(), "ollama": state.config.ollama_url.is_some()}),
-    )
+    let providers: Vec<Value> = state
+        .gateway
+        .status()
+        .into_iter()
+        .map(|provider| {
+            let behaviour = match provider.id.as_str() {
+                "local-stand-in" => Some(behaviour_name(state.local.behaviour())),
+                "remote-stand-in" => Some(behaviour_name(state.remote.behaviour())),
+                _ => None,
+            };
+            let mut value = serde_json::to_value(&provider).unwrap_or(Value::Null);
+            value["behaviour"] = json!(behaviour);
+            value
+        })
+        .collect();
+    Json(json!({
+        "providers": providers,
+        "call_timeout_ms": CALL_TIMEOUT.as_millis(),
+        "ollama": state.config.ollama_url.is_some(),
+    }))
+}
+
+pub(crate) fn behaviour_name(behaviour: Behaviour) -> &'static str {
+    match behaviour {
+        Behaviour::Healthy => "healthy",
+        Behaviour::Failing => "failing",
+        Behaviour::Slow(_) => "slow",
+    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -56,7 +56,7 @@ pub async fn provider(
     };
     target.set_behaviour(behaviour);
     Ok(Json(
-        json!({"provider": id, "behaviour": target.behaviour(), "calls": target.calls(), "providers": state.gateway.status()}),
+        json!({"provider": id, "behaviour": super::gateway::behaviour_name(target.behaviour()), "calls": target.calls(), "providers": state.gateway.status()}),
     ))
 }
 
@@ -192,13 +192,14 @@ async fn ensure_history(state: &Shared) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn anchor_name(result: &Result<(), AnchorMismatch>) -> Value {
+fn anchor_name(result: Option<&Result<(), AnchorMismatch>>) -> Value {
     match result {
-        Ok(()) => json!({"result": "matches"}),
-        Err(AnchorMismatch::Truncated { expected, found }) => {
+        None => json!({"result": "not_checked", "why": "the chain is already broken"}),
+        Some(Ok(())) => json!({"result": "matches"}),
+        Some(Err(AnchorMismatch::Truncated { expected, found })) => {
             json!({"result": "truncated", "expected": expected, "found": found})
         }
-        Err(AnchorMismatch::Rewritten) => json!({"result": "rewritten"}),
+        Some(Err(AnchorMismatch::Rewritten)) => json!({"result": "rewritten"}),
     }
 }
 
@@ -267,18 +268,21 @@ pub async fn forge_ledger(
 
     let before = verify_ledger(&state.broker.ledger_path(), key.as_ref());
     let after = verify_ledger(&copy, key.as_ref());
-    let anchor = check_anchor(&copy, key.as_ref(), kept_length, &kept_head);
+    // A broken chain is already caught; the anchor only matters when the chain still verifies.
+    let anchor = after
+        .is_valid()
+        .then(|| check_anchor(&copy, key.as_ref(), kept_length, &kept_head));
     let _ = std::fs::remove_file(&copy);
-    let detected = !after.is_valid() || anchor.is_err();
+    let detected = !after.is_valid() || anchor.as_ref().is_some_and(Result::is_err);
     Ok(Json(json!({
         "mode": format!("{:?}", input.mode).to_lowercase(),
         "explanation": explanation,
         "keyed": key.is_some(),
         "original": {"entries": before.entries, "valid": before.is_valid()},
         "forged": {"entries": after.entries, "valid": after.is_valid(), "broken": after.broken},
-        "anchor": {"kept": {"length": kept_length, "head": kept_head}, "check": anchor_name(&anchor)},
+        "anchor": {"kept": {"length": kept_length, "head": kept_head}, "check": anchor_name(anchor.as_ref())},
         "detected": detected,
-        "detected_by": if !after.is_valid() { "the chain" } else if anchor.is_err() { "the anchor" } else { "nothing" },
+        "detected_by": if !after.is_valid() { "the chain" } else if anchor.as_ref().is_some_and(Result::is_err) { "the anchor" } else { "nothing" },
     })))
 }
 
@@ -302,7 +306,7 @@ pub async fn impostor(
         .ok_or_else(|| {
             ApiError::unprocessable(
                 "unknown_kind",
-                "kind must be wrong_role, foreign_ca, expired or no_certificate",
+                "kind must be wrong_role, foreign_ca, expired, no_certificate or not_tls",
             )
         })
 }

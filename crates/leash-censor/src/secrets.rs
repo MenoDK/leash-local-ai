@@ -180,7 +180,7 @@ mod tests {
     #[test]
     fn redacts_url_credentials_but_keeps_plain_urls() {
         let (out, n) = redact(
-            "postgres://svc:hunter22hunter@db.internal:5432/app and https://example.test/path",
+            "postgres://svc:hunter22hunter@db.example.test:5432/app and https://example.test/path",
         );
         assert_eq!(n, 1);
         assert!(out.contains("https://example.test/path"));

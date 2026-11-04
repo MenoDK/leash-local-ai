@@ -1,0 +1,150 @@
+name: ci
+
+on:
+  push: { branches: [main] }
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  # The toolchain this repository is developed and tested on. Cargo.toml also states the oldest one it promises to build on.
+  RUST_TOOLCHAIN: "1.99.1"
+
+jobs:
+  rust:
+    name: Rust (format, clippy, tests, the vsock transport compiles)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt --component clippy
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - name: Clippy, every warning an error
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # The hypervisor-socket transport sits behind a feature. CI cannot run it between a real host and guest, but it can
+      # and does keep it compiling and lint-clean.
+      - name: Clippy with the vsock feature
+        run: cargo clippy -p leash-bridge --features vsock --all-targets --locked -- -D warnings
+      - name: Tests (unit, integration, doc tests)
+        run: cargo test --workspace --locked
+
+  msrv:
+    name: Builds on the oldest Rust the manifest promises
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read rust-version from Cargo.toml
+        id: msrv
+        run: echo "version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+      - name: Install that toolchain
+        run: |
+          rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+          rustup default "${{ steps.msrv.outputs.version }}"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace --all-targets --locked
+
+  sabotage:
+    name: Every defence is watched (mutation check)
+    needs: [rust]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: ". -> target/sabotage" }
+      - run: scripts/sabotage.sh
+
+  stack:
+    name: Stack (docker compose, black-box smoke test, recorded tour)
+    needs: [rust]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: make env
+      - name: make env is idempotent (a second run must not rotate the ledger key)
+        run: |
+          cp .env "$RUNNER_TEMP/env.first"
+          make env
+          cmp .env "$RUNNER_TEMP/env.first"
+      - run: docker compose up -d --build --wait
+      - run: scripts/smoke.sh http://localhost:8090
+      - name: The recorded tour on the page still matches what the server answers
+        run: node scripts/record-transcripts.mjs --check
+      - name: Stop and start again on the same volume (the ledger must open with the same key)
+        run: |
+          make down
+          make up
+          scripts/smoke.sh http://localhost:8090
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=200
+      - run: docker compose down -v
+
+  browser:
+    name: Browser (landing, lab, 14 languages; Playwright + axe)
+    needs: [rust]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # The same command a reviewer runs locally: builds the container with the lab on and drives it with Playwright.
+      - name: make e2e
+        run: make e2e
+        env:
+          CI: "true"
+      - name: Test results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with: { name: browser-test-results, path: e2e/test-results, if-no-files-found: ignore }
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --no-color --tail=200
+      - run: docker compose down -v
+
+  security:
+    name: Security (secrets, Dockerfile, dependencies, workflow)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      # The binary, pinned and checksum-verified, instead of gitleaks-action: the action scans "<first commit>^..HEAD",
+      # and the first commit of a new repository has no parent, so it fails on the very first push.
+      - name: Install gitleaks (pinned, checksum verified)
+        run: |
+          v=8.24.3
+          base=https://github.com/gitleaks/gitleaks/releases/download/v$v
+          archive=gitleaks_${v}_linux_x64.tar.gz # keep the release's file name: the checksum list refers to it
+          curl -sSfLO "$base/$archive"
+          curl -sSfLO "$base/gitleaks_${v}_checksums.txt"
+          sha256sum --check --ignore-missing "gitleaks_${v}_checksums.txt" | grep -F "$archive: OK"
+          tar xzf "$archive" gitleaks
+      - name: Secret scan (full history)
+        run: ./gitleaks git --no-banner --redact -v .
+      - name: Lint the Dockerfile
+        uses: hadolint/hadolint-action@v3.1.0
+        with: { dockerfile: Dockerfile, failure-threshold: warning }
+      - name: Lint this workflow
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
+      - name: Audit the dependencies against the RustSec advisory database
+        uses: taiki-e/install-action@v2
+        with: { tool: cargo-audit }
+      - run: cargo audit

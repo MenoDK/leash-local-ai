@@ -759,6 +759,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tower",
  "tower-http",
  "tracing",

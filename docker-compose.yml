@@ -1,0 +1,46 @@
+# The whole system on one machine: one container, one volume.
+#   make up      builds and starts it; the site, the lab and the API are on http://localhost:8090
+#   make e2e     runs the browser tests against the same container
+# The ledger key comes from .env (make env writes one with a fresh random value). Nothing here is a real credential.
+name: leash
+
+services:
+  app:
+    build: .
+    image: leash-local-ai:local
+    restart: unless-stopped
+    # The container can read its own site and write only its own data volume.
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # Published on the loopback only: the lab has no login on purpose, so it must not be reachable from the network.
+    ports: ["127.0.0.1:${LEASH_PORT:-8090}:8090"]
+    volumes:
+      - leashdata:/data
+    environment:
+      LEASH_ENV: development
+      # The lab: buttons that attack the defences and a way to forge a copy of the ledger. LEASH_ENV=production
+      # refuses to start with it on.
+      LEASH_LAB: "1"
+      LEASH_LEDGER_KEY: ${LEASH_LEDGER_KEY:?run "make env" first}
+
+  # Browser tests. They share the service's network namespace, so the page is http://localhost:8090, a secure context
+  # without any browser flag.
+  e2e:
+    profiles: [e2e]
+    image: mcr.microsoft.com/playwright:v1.49.1-jammy
+    network_mode: "service:app"
+    working_dir: /work/e2e
+    volumes:
+      - ./e2e:/work/e2e
+      - ./docs/img:/work/docs/img
+    environment:
+      E2E_BASE_URL: http://localhost:8090
+      CI: "1"
+    depends_on:
+      app: { condition: service_healthy }
+    command: ["bash", "-lc", "npm ci --no-audit --no-fund && npx tsc --noEmit && npx playwright test"]
+
+volumes:
+  leashdata:

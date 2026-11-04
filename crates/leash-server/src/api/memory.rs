@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::gateway::CALL_TIMEOUT;
-use super::routed_json;
+use super::{rounded, routed_json};
 use crate::error::{ApiError, ApiJson};
 use crate::state::Shared;
 
@@ -51,8 +51,8 @@ pub async fn ask(
     match retrieval {
         Retrieval::DontKnow { nearest } => Ok(Json(json!({
             "answer": "dont_know",
-            "nearest": nearest,
-            "floor": state.memory_config.floor,
+            "nearest": nearest.map(rounded),
+            "floor": rounded(state.memory_config.floor),
             "note": "nothing in the documents is relevant enough, so no model was asked",
         }))),
         Retrieval::Found { hits } => {

@@ -1,0 +1,4 @@
+# Documentation guards: https://github.com/MenoDK/docsguard (docsguard). Run: docsguard check
+
+[budget]
+max_session_tokens = 3000

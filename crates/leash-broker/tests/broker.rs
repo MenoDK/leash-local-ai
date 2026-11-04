@@ -6,11 +6,12 @@ mod common;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use common::{bind_copy, manifest, system_program, token};
 use leash_broker::{
-    Actor, Approval, Broker, BrokerConfig, Decision, Ledger, Refusal, ResolveError, State,
-    ValidateError, verify_ledger,
+    Actor, Approval, Broker, BrokerConfig, Decision, Ledger, LedgerError, Refusal, ResolveError,
+    State, ValidateError, verify_ledger,
 };
 
 struct Fixture {
@@ -24,6 +25,25 @@ fn args(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         .iter()
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
         .collect()
+}
+
+/// Opens the ledger again once whoever held it has let go.
+///
+/// The lock is `flock(2)`, which belongs to the open file description, not to the process. Tests in this file run on
+/// parallel threads of one process and some of them fork a child; in the instant between its `fork` and `exec` that
+/// child holds a copy of every descriptor, so a lock this test has just released can look held for a few
+/// microseconds. Waiting a bounded time for that is correct; waiting forever, or not at all, is not.
+fn reopen(path: &Path) -> Ledger {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match Ledger::open(path, None) {
+            Ok(ledger) => return ledger,
+            Err(LedgerError::Locked) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            Err(e) => panic!("the ledger could not be reopened: {e}"),
+        }
+    }
 }
 
 fn fixture_with(config: BrokerConfig) -> Fixture {
@@ -527,7 +547,7 @@ async fn the_ledger_keeps_working_across_a_restart_of_the_broker() {
     assert_eq!(length, 4);
     drop(f.broker); // releases the ledger's lock, as a restart would
 
-    let reopened = Ledger::open(&path, None).unwrap();
+    let reopened = reopen(&path);
     assert_eq!((reopened.len(), reopened.head()), (4, head.as_str()));
     assert_eq!(
         leash_broker::check_anchor(&path, None, length, &head),

@@ -72,10 +72,15 @@ async fn overview(State(state): State<Shared>) -> Json<Value> {
         "lab": state.config.lab,
         "ollama": state.config.ollama_url.is_some(),
         "gateway": state.gateway.status(),
-        "memory": {"chunks": memory_chunks, "floor": state.memory_config.floor, "top_k": state.memory_config.top_k},
+        "memory": {"chunks": memory_chunks, "floor": rounded(state.memory_config.floor), "top_k": state.memory_config.top_k},
         "broker": {"commands": state.broker.commands().len(), "ledger_entries": ledger_len, "ledger_head": ledger_head, "keyed": state.ledger_key.is_some()},
         "bridge": {"heartbeat_timeout_ms": state.bridge.heartbeat_timeout_ms()},
     }))
+}
+
+/// A similarity score as people read it: two decimals, not the widened `f32` (0.3 would print as 0.30000001192092896).
+pub(crate) fn rounded(value: f32) -> f64 {
+    (f64::from(value) * 100.0).round() / 100.0
 }
 
 /// A routing outcome as the API reports it: a refusal is an answer, not a server error.
