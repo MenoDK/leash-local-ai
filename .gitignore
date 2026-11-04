@@ -1,0 +1,12 @@
+/target/
+**/*.rs.bk
+.env
+.env.*
+!.env.example
+/data/
+*.log
+.idea/
+.vscode/
+node_modules/
+test-results/
+playwright-report/

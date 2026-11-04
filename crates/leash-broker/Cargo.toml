@@ -1,0 +1,28 @@
+[package]
+name = "leash-broker"
+description = "Runs only commands a person bound: allow-listed, hash-pinned, no shell, human-approved, hash-chained ledger."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+getrandom.workspace = true
+hex.workspace = true
+hmac = "0.12"
+leash-censor = { path = "../leash-censor" }
+rustix = { workspace = true, features = ["fs"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
+
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true
